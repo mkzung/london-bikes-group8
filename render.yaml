@@ -1,0 +1,12 @@
+services:
+  - type: web
+    name: london-bikes-group8
+    runtime: python
+    plan: free
+    # The two commands the assignment specifies. The port comes from
+    # gunicorn.conf.py, which gunicorn loads on its own.
+    buildCommand: pip install uv && uv sync
+    startCommand: uv run gunicorn app:server
+    envVars:
+      - key: PYTHON_VERSION
+        value: "3.12.11"

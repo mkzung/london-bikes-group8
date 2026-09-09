@@ -1,0 +1,20 @@
+[project]
+name = "london-bikes-dashboard"
+version = "1.0.0"
+description = "Daily hire dashboard for TfL Santander Cycles, AM01 Study Group 8"
+readme = "README.md"
+requires-python = "==3.12.*"
+
+# Pinned rather than bounded, and pinned to what the app was built and checked
+# against. Dash 4 renames the classes its dropdown and slider paint themselves
+# with, so an older resolve would install a working app wearing none of its
+# styling. requirements.txt carries the same set for Render's build command.
+dependencies = [
+    "dash==4.4.0",
+    "plotly==6.9.0",
+    "pandas==2.3.3",
+    "numpy==2.5.1",
+    "requests==2.34.2",
+    "statsmodels==0.14.6",
+    "gunicorn==23.0.0",
+]
