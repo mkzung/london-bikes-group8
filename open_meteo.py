@@ -11,8 +11,8 @@ API key. This module has two functions, both returning the same tidy shape:
 
 Both return a pandas DataFrame with one row per day and the columns:
 
-    date, day_of_week, season_name,
-    temp, humidity, precip, windspeed, cloudcover, sealevelpressure, solarradiation
+    date, day_of_week, season_name, temp, humidity, precip, windspeed,
+    cloudcover, sealevelpressure, solarradiation, visibility
 
 which line up with the model's predictors. Temperature is in degrees Celsius,
 wind in km/h, precipitation in mm, humidity and cloud cover in percent, and sea
@@ -20,10 +20,10 @@ level pressure in hPa. Day of week and season come from the date itself.
 
 Sea level pressure was added because the archive and the training file agree on
 it closely: over 2024 they correlate at r = 0.999 and their means differ by
-0.19 hPa. Solar radiation needed calibrating first, and is described where the
-constants are. Visibility is the one field the model wanted and this module does
-not supply: Open-Meteo's historical archive returns nothing for it at all, and
-the archive is what the January panel reads.
+0.19 hPa. Solar radiation and visibility both needed calibrating first, and are
+described where their constants are. Visibility also needs a second source:
+Open-Meteo's ERA5 archive returns nothing for it at all, so past days are read
+from the historical forecast archive, which does carry it.
 
 The forecast reaches about 7 days ahead. For any date in the past (for example
 the first week of January 2026) use open_meteo_history, which reads Open-Meteo's
@@ -38,6 +38,7 @@ import pandas as pd
 GEOCODE_URL = "https://geocoding-api.open-meteo.com/v1/search"
 FORECAST_URL = "https://api.open-meteo.com/v1/forecast"
 ARCHIVE_URL = "https://archive-api.open-meteo.com/v1/archive"
+PAST_FORECAST_URL = "https://historical-forecast-api.open-meteo.com/v1/forecast"
 
 # Forecast API daily field  ->  the column name our model uses
 DAILY_FIELDS = {
@@ -61,6 +62,19 @@ SOLAR_SLOPE = 0.6200
 
 def calibrate_solar(mean_shortwave):
     return SOLAR_INTERCEPT + SOLAR_SLOPE * mean_shortwave
+
+# Visibility is reported in metres and the training file works in kilometres, and
+# the two disagree by more than a unit change: over the 1,096 days they share they
+# correlate at only 0.480, so the line below matches their means and their spread
+# rather than their days. file = 6.5637 + 0.9826 * open-meteo km, R squared 0.230,
+# mean absolute error 6.95 km against a file spread of 10.57. It is the weakest
+# transfer in this module by a wide margin and the README says so.
+VIS_INTERCEPT = 6.5637
+VIS_SLOPE = 0.9826
+
+
+def calibrate_visibility(mean_metres):
+    return VIS_INTERCEPT + VIS_SLOPE * (mean_metres / 1000.0)
 
 # The archive API has no daily means, so we pull these hourly fields and
 # aggregate them ourselves (mean for most, sum for precipitation).
@@ -146,7 +160,7 @@ def open_meteo(location="London", days_to_forecast=5):
         "latitude": lat,
         "longitude": lon,
         "daily": ",".join(DAILY_FIELDS),
-        "hourly": "shortwave_radiation",
+        "hourly": "shortwave_radiation,visibility",
         "forecast_days": days_to_forecast,
         "timezone": "auto",
         "wind_speed_unit": "kmh",   # matches the training data units
@@ -163,15 +177,39 @@ def open_meteo(location="London", days_to_forecast=5):
     df.insert(0, "date", pd.to_datetime(daily["time"]))
 
     hourly = resp.json()["hourly"]
-    sw = pd.DataFrame({"shortwave": hourly["shortwave_radiation"]})
-    sw["date"] = pd.to_datetime(hourly["time"]).normalize()
-    df["solarradiation"] = calibrate_solar(
-        df["date"].map(sw.groupby("date")["shortwave"].mean()))
+    hf = pd.DataFrame({"shortwave": hourly["shortwave_radiation"],
+                       "vis": hourly["visibility"]})
+    hf["date"] = pd.to_datetime(hourly["time"]).normalize()
+    per_day = hf.groupby("date").mean(numeric_only=True)
+    df["solarradiation"] = calibrate_solar(df["date"].map(per_day["shortwave"]))
+    df["visibility"] = calibrate_visibility(df["date"].map(per_day["vis"]))
 
     add_calendar(df)
     df.attrs["location"] = label
     _CACHE[key] = (time.time(), df)
     return df.copy()
+
+
+def past_visibility(lat, lon, start_date, end_date):
+    """Daily mean visibility for a past range, on the training file's scale.
+
+    ERA5, which serves every other column here, has no visibility at all: ask the
+    archive for it and every hour comes back null. The historical forecast archive
+    keeps what the forecast model said at the time, and that does carry it.
+    """
+    key = ("vis", lat, lon, start_date, end_date)
+    if key in _CACHE:
+        return _CACHE[key].copy()
+    resp = _get(PAST_FORECAST_URL,
+                {"latitude": lat, "longitude": lon,
+                 "start_date": start_date, "end_date": end_date,
+                 "hourly": "visibility", "timezone": "auto"}, 30)
+    hourly = resp.json()["hourly"]
+    hf = pd.DataFrame({"vis": hourly["visibility"]})
+    hf["date"] = pd.to_datetime(hourly["time"]).normalize()
+    out = calibrate_visibility(hf.groupby("date")["vis"].mean())
+    _CACHE[key] = out
+    return out.copy()
 
 
 def open_meteo_history(location, start_date, end_date):
@@ -221,6 +259,8 @@ def open_meteo_history(location, start_date, end_date):
         shortwave=("shortwave", "mean"),
     ).reset_index()
     daily["solarradiation"] = calibrate_solar(daily.pop("shortwave"))
+    daily["visibility"] = past_visibility(lat, lon, start_date, end_date).reindex(
+        daily["date"]).to_numpy()
 
     add_calendar(daily)
     daily.attrs["location"] = label

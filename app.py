@@ -206,7 +206,7 @@ def rangeselector(p):
 # The five-day panel is refetched every morning. A free y-axis would rescale
 # overnight and make Tuesday and Wednesday incomparable at a glance, so it is pinned
 # above the highest this panel's own arithmetic reaches on the training weather,
-# 50,154, plus the 9,654 the prediction band adds on top of it.
+# 49,300, plus the 9,377 the prediction band adds on top of it.
 FORECAST_CEILING = 60000
 
 GRAPH_CONFIG = {
@@ -256,13 +256,14 @@ COLUMNS = {
     "solarradiation": ("Solar W/m²", 0),
 }
 
-# The seven open_meteo.py returns, which is wider than the model uses: humidity and
+# The eight open_meteo.py returns, which is wider than the model uses: humidity and
 # cloud cover are worth looking at even though the fit dropped them. The training
 # file also carries feels-like, which tracks temp at r = 0.99 and is the collinearity
 # Part 3 is about, but the forecast cannot supply it.
 WEATHER = {
     "temp": ("Temperature", "°C"),
     "solarradiation": ("Solar radiation", "W/m²"),
+    "visibility": ("Visibility", "km"),
     "humidity": ("Humidity", "%"),
     "precip": ("Precipitation", "mm"),
     "windspeed": ("Wind speed", ""),
@@ -278,7 +279,13 @@ COLOUR_BY = {
 # The app never refits, so the figures in the masthead are quoted rather than
 # computed. They come from the M4 summary in bikes_assignment_group8.ipynb and have
 # to be re-read from it whenever the model changes.
-FIT = {"adj_r2": "0.712", "resid_se": "4,925", "days": "4,382"}
+FIT = {"adj_r2": "0.728", "resid_se": "4,784", "days": "4,382"}
+
+# The prediction band needs the residual standard error, and the notebook's export
+# writes one row per model term and nothing else. Read from the file where a row
+# for it exists, and otherwise from here, where it is quoted from the same summary
+# the two figures above come from.
+RESIDUAL_SE = 4784.003
 
 # Open-Meteo documents its wind in km/h; the training file's wind runs seven units
 # above it, so the Explore axis stays unitless and only the forecast tables, which
@@ -1053,7 +1060,7 @@ def prediction(weather, p, ceiling=None):
     # 95% prediction interval, taken as 1.96 residual standard errors: that leaves
     # out the uncertainty in the coefficients, which the notebook measures at 0.2%
     # of the width. Floored at zero for the same reason the point estimate is.
-    half = 1.96 * coefficients.get("residual_se", 0.0)
+    half = 1.96 * coefficients.get("residual_se", RESIDUAL_SE)
     lo = (pred["predicted_hires"] - half).clip(lower=0)
     hi = pred["predicted_hires"] + half
     ceiling = ceiling or float(hi.max()) * 1.08
